@@ -6,6 +6,24 @@
   <title>MileLog</title>
   <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet"/>
   <style>
+    .pac-container { background: #1e1e1e; border: 1px solid #2a2a2a; border-radius: 8px; font-family: 'DM Mono', monospace; margin-top: 4px; }
+    .pac-item { padding: 10px 14px; color: #f0f0f0; font-size: 13px; cursor: pointer; border-top: 1px solid #2a2a2a; }
+    .pac-item:hover, .pac-item-selected { background: #2a2a2a; }
+    .pac-item-query { color: #c8f461; font-size: 13px; }
+    .pac-matched { color: #c8f461; }
+    .pac-icon { display: none; }
+  </style>
+  <script>
+    function initAutocomplete() {
+      const fromInput = document.getElementById('fromAddr');
+      const toInput = document.getElementById('toAddr');
+      const options = { componentRestrictions: { country: 'gb' }, fields: ['formatted_address'] };
+      new google.maps.places.Autocomplete(fromInput, options);
+      new google.maps.places.Autocomplete(toInput, options);
+    }
+  </script>
+  <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyCcQUNM3V10jlkIiODWo9_2bRAYkMOFGNs&libraries=places&callback=initAutocomplete" async defer></script>
+  <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     :root {
       --bg: #0e0e0e; --surface: #161616; --surface2: #1e1e1e;

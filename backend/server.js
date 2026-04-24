@@ -1,32 +1,35 @@
-require("dotenv").config();
-const express = require("express");
-const cors = require("cors");
-
-require("./db");
-
-const authRoutes = require("./routes/auth");
-const tripsRoutes = require("./routes/trips");
-const distanceRoutes = require("./routes/distance");
+require('dotenv').config();
+const express = require('express');
+const cors = require('cors');
+const path = require('path');
+const { initDB } = require('./db');
 
 const app = express();
-const PORT = process.env.PORT || 4000;
 
 app.use(cors());
 app.use(express.json());
 
-app.get("/api/health", (_req, res) => {
-  res.json({ ok: true, service: "milelog-backend" });
+// Serve frontend static files
+app.use(express.static(path.join(__dirname, '../frontend/public')));
+
+// API Routes
+app.use('/api/auth', require('./routes/auth'));
+app.use('/api/trips', require('./routes/trips'));
+app.use('/api/distance', require('./routes/distance'));
+
+// Health check
+app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
+
+// Serve frontend for all non-API routes
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, '../frontend/public/index.html'));
 });
 
-app.use("/api/auth", authRoutes);
-app.use("/api/trips", tripsRoutes);
-app.use("/api/distance", distanceRoutes);
+const PORT = process.env.PORT || 3001;
 
-app.use((err, _req, res, _next) => {
-  console.error(err);
-  res.status(500).json({ error: "Unexpected server error" });
-});
-
-app.listen(PORT, () => {
-  console.log(`MileLog API running on port ${PORT}`);
+initDB().then(() => {
+  app.listen(PORT, () => console.log(`MileLog running on port ${PORT}`));
+}).catch(err => {
+  console.error('DB init failed:', err);
+  process.exit(1);
 });

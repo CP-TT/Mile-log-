@@ -1,35 +1,37 @@
-const path = require("path");
-const sqlite3 = require("sqlite3").verbose();
+const { Pool } = require('pg');
 
-const dbPath = process.env.DB_PATH || path.join(__dirname, "milelog.db");
-const db = new sqlite3.Database(dbPath);
-
-db.serialize(() => {
-  db.run("PRAGMA foreign_keys = ON");
-
-  db.run(`
-    CREATE TABLE IF NOT EXISTS users (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      email TEXT NOT NULL UNIQUE,
-      password_hash TEXT NOT NULL,
-      created_at TEXT DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
-
-  db.run(`
-    CREATE TABLE IF NOT EXISTS trips (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id INTEGER NOT NULL,
-      trip_date TEXT NOT NULL,
-      purpose TEXT NOT NULL,
-      origin TEXT,
-      destination TEXT,
-      distance REAL NOT NULL,
-      notes TEXT,
-      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
-    )
-  `);
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
 });
 
-module.exports = db;
+const initDB = async () => {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS users (
+      id SERIAL PRIMARY KEY,
+      name VARCHAR(100) NOT NULL,
+      email VARCHAR(255) UNIQUE NOT NULL,
+      password_hash VARCHAR(255) NOT NULL,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS trips (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      date DATE NOT NULL,
+      from_address TEXT NOT NULL,
+      to_address TEXT NOT NULL,
+      miles DECIMAL(8,1) NOT NULL,
+      purpose TEXT,
+      type VARCHAR(20) DEFAULT 'business',
+      hmrc_value DECIMAL(8,2) DEFAULT 0,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_trips_user_id ON trips(user_id);
+    CREATE INDEX IF NOT EXISTS idx_trips_date ON trips(date);
+  `);
+  console.log('Database ready');
+};
+
+module.exports = { pool, initDB };

@@ -1,27 +1,37 @@
-const express = require("express");
-const auth = require("../middleware/auth");
-
+const express = require('express');
+const axios = require('axios');
+const auth = require('../middleware/auth');
 const router = express.Router();
 
-router.use(auth);
+router.get('/', auth, async (req, res) => {
+  const { origin, destination } = req.query;
+  if (!origin || !destination) return res.status(400).json({ error: 'Origin and destination required' });
 
-router.get("/estimate", (req, res) => {
-  const { from, to } = req.query;
+  try {
+    const response = await axios.get('https://maps.googleapis.com/maps/api/directions/json', {
+      params: {
+        origin,
+        destination,
+        units: 'imperial',
+        key: process.env.GOOGLE_MAPS_API_KEY,
+        region: 'gb'
+      }
+    });
 
-  if (!from || !to) {
-    return res.status(400).json({ error: "Query params 'from' and 'to' are required" });
+    const data = response.data;
+    if (data.status !== 'OK') {
+      return res.status(400).json({ error: `Maps API error: ${data.status}` });
+    }
+
+    const meters = data.routes[0].legs[0].distance.value;
+    const miles = Math.round((meters / 1609.344) * 10) / 10;
+    const durationText = data.routes[0].legs[0].duration.text;
+
+    res.json({ miles, duration: durationText });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Could not calculate distance' });
   }
-
-  const fromLen = String(from).trim().length;
-  const toLen = String(to).trim().length;
-  const estimate = Math.max(1, Number(((fromLen + toLen) * 1.3).toFixed(1)));
-
-  return res.json({
-    from,
-    to,
-    estimatedDistanceMiles: estimate,
-    note: "Stub estimate based on string length. Replace with a maps API in production.",
-  });
 });
 
 module.exports = router;

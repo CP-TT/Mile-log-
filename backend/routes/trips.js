@@ -1,131 +1,105 @@
-const express = require("express");
-const db = require("../db");
-const auth = require("../middleware/auth");
-
+const express = require('express');
+const { pool } = require('../db');
+const auth = require('../middleware/auth');
 const router = express.Router();
 
-router.use(auth);
+function calcHMRC(miles, prevBusinessMiles) {
+  const THRESHOLD = 10000;
+  const RATE_HIGH = 0.45;
+  const RATE_LOW = 0.25;
+  const remaining = Math.max(0, THRESHOLD - prevBusinessMiles);
+  const highMiles = Math.min(miles, remaining);
+  const lowMiles = Math.max(0, miles - highMiles);
+  return parseFloat(((highMiles * RATE_HIGH) + (lowMiles * RATE_LOW)).toFixed(2));
+}
 
-router.get("/", (req, res) => {
-  const sql = `
-    SELECT id, trip_date, purpose, origin, destination, distance, notes, created_at
-    FROM trips
-    WHERE user_id = ?
-    ORDER BY trip_date DESC, id DESC
-  `;
+router.get('/', auth, async (req, res) => {
+  const { from, to } = req.query;
+  let query = 'SELECT * FROM trips WHERE user_id = $1';
+  const params = [req.user.id];
 
-  db.all(sql, [req.user.id], (err, rows) => {
-    if (err) {
-      return res.status(500).json({ error: "Failed to fetch trips" });
-    }
-    return res.json(rows);
-  });
+  if (from && to) {
+    query += ` AND date >= $2 AND date <= $3`;
+    params.push(from, to);
+  } else if (from) {
+    query += ` AND date >= $2`;
+    params.push(from);
+  } else if (to) {
+    query += ` AND date <= $2`;
+    params.push(to);
+  }
+
+  query += ' ORDER BY date DESC, created_at DESC';
+
+  try {
+    const result = await pool.query(query, params);
+    res.json(result.rows);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Server error' });
+  }
 });
 
-router.post("/", (req, res) => {
-  const { trip_date, purpose, origin, destination, distance, notes } = req.body;
-
-  if (!trip_date || !purpose || distance === undefined) {
-    return res.status(400).json({ error: "trip_date, purpose, and distance are required" });
+router.get('/summary', auth, async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT 
+        TO_CHAR(date, 'YYYY-MM') as month,
+        TO_CHAR(date, 'Mon YYYY') as month_label,
+        COUNT(*) as trip_count,
+        SUM(miles) as total_miles,
+        SUM(CASE WHEN type = 'business' THEN hmrc_value ELSE 0 END) as hmrc_total,
+        SUM(CASE WHEN type = 'business' THEN miles ELSE 0 END) as business_miles,
+        SUM(CASE WHEN type = 'personal' THEN miles ELSE 0 END) as personal_miles
+      FROM trips
+      WHERE user_id = $1
+      GROUP BY TO_CHAR(date, 'YYYY-MM'), TO_CHAR(date, 'Mon YYYY')
+      ORDER BY month DESC
+    `, [req.user.id]);
+    res.json(result.rows);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Server error' });
   }
-
-  const parsedDistance = Number(distance);
-  if (Number.isNaN(parsedDistance) || parsedDistance < 0) {
-    return res.status(400).json({ error: "Distance must be a valid non-negative number" });
-  }
-
-  const sql = `
-    INSERT INTO trips (user_id, trip_date, purpose, origin, destination, distance, notes)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `;
-
-  const params = [
-    req.user.id,
-    trip_date,
-    purpose,
-    origin || null,
-    destination || null,
-    parsedDistance,
-    notes || null,
-  ];
-
-  db.run(sql, params, function onInsert(err) {
-    if (err) {
-      return res.status(500).json({ error: "Failed to create trip" });
-    }
-
-    return res.status(201).json({
-      id: this.lastID,
-      trip_date,
-      purpose,
-      origin: origin || null,
-      destination: destination || null,
-      distance: parsedDistance,
-      notes: notes || null,
-    });
-  });
 });
 
-router.put("/:id", (req, res) => {
-  const tripId = Number(req.params.id);
-  const { trip_date, purpose, origin, destination, distance, notes } = req.body;
-
-  if (!trip_date || !purpose || distance === undefined) {
-    return res.status(400).json({ error: "trip_date, purpose, and distance are required" });
+router.post('/', auth, async (req, res) => {
+  const { date, from_address, to_address, miles, purpose, type } = req.body;
+  if (!date || !from_address || !to_address || !miles) {
+    return res.status(400).json({ error: 'Missing required fields' });
   }
 
-  const parsedDistance = Number(distance);
-  if (!Number.isInteger(tripId) || tripId <= 0) {
-    return res.status(400).json({ error: "Invalid trip id" });
+  try {
+    const prev = await pool.query(
+      'SELECT COALESCE(SUM(miles), 0) as total FROM trips WHERE user_id = $1 AND type = $2',
+      [req.user.id, 'business']
+    );
+    const prevMiles = parseFloat(prev.rows[0].total);
+    const hmrc_value = type === 'business' ? calcHMRC(parseFloat(miles), prevMiles) : 0;
+
+    const result = await pool.query(
+      'INSERT INTO trips (user_id, date, from_address, to_address, miles, purpose, type, hmrc_value) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *',
+      [req.user.id, date, from_address, to_address, miles, purpose || null, type || 'business', hmrc_value]
+    );
+    res.json(result.rows[0]);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Server error' });
   }
-  if (Number.isNaN(parsedDistance) || parsedDistance < 0) {
-    return res.status(400).json({ error: "Distance must be a valid non-negative number" });
-  }
-
-  const sql = `
-    UPDATE trips
-    SET trip_date = ?, purpose = ?, origin = ?, destination = ?, distance = ?, notes = ?
-    WHERE id = ? AND user_id = ?
-  `;
-
-  const params = [
-    trip_date,
-    purpose,
-    origin || null,
-    destination || null,
-    parsedDistance,
-    notes || null,
-    tripId,
-    req.user.id,
-  ];
-
-  db.run(sql, params, function onUpdate(err) {
-    if (err) {
-      return res.status(500).json({ error: "Failed to update trip" });
-    }
-    if (this.changes === 0) {
-      return res.status(404).json({ error: "Trip not found" });
-    }
-    return res.json({ message: "Trip updated successfully" });
-  });
 });
 
-router.delete("/:id", (req, res) => {
-  const tripId = Number(req.params.id);
-  if (!Number.isInteger(tripId) || tripId <= 0) {
-    return res.status(400).json({ error: "Invalid trip id" });
+router.delete('/:id', auth, async (req, res) => {
+  try {
+    const result = await pool.query(
+      'DELETE FROM trips WHERE id = $1 AND user_id = $2 RETURNING id',
+      [req.params.id, req.user.id]
+    );
+    if (!result.rows.length) return res.status(404).json({ error: 'Trip not found' });
+    res.json({ success: true });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Server error' });
   }
-
-  const sql = "DELETE FROM trips WHERE id = ? AND user_id = ?";
-  db.run(sql, [tripId, req.user.id], function onDelete(err) {
-    if (err) {
-      return res.status(500).json({ error: "Failed to delete trip" });
-    }
-    if (this.changes === 0) {
-      return res.status(404).json({ error: "Trip not found" });
-    }
-    return res.json({ message: "Trip deleted successfully" });
-  });
 });
 
 module.exports = router;
